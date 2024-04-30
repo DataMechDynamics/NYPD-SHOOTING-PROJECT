@@ -1,0 +1,294 @@
+---
+title: "WEEK 3  NYPD Shooting Incident Data Report"
+author: "HDaher"
+date: "2024-04-06"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+------------------------------------------------------------------------
+
+# Description
+
+-   Data set of every Shooting Incident in NYC since 2006 to end of previous calendar year.
+-   Each record includes information about the event, the location and time of occurrence.
+-   information related to suspect and victim demographics is also included.
+-   This data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website.
+
+```{r}
+url_NYPD <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+
+NYPD <- read.csv(url_NYPD)
+
+```
+
+# Libraries
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(broom)
+```
+
+# Data Exploration
+
+```{r}
+dim(NYPD)
+tail(NYPD)
+#numerical statistics summary
+summary(NYPD[, sapply(NYPD, is.numeric)])
+#categorical statistics summary
+summary(NYPD[, sapply(NYPD, is.factor)])
+# Looking at column values
+glimpse(NYPD)
+names(NYPD)
+
+```
+
+# Data Preparation
+
+```{r}
+# Convert categorical variables to factors
+NYPD <- NYPD %>%
+  mutate_at(vars(BORO, PERP_SEX, PERP_RACE, VIC_AGE_GROUP, VIC_SEX, VIC_RACE), factor)
+# Remove unnecessary columns 
+NYPD <- NYPD %>% select(-Lon_Lat)
+
+summary(NYPD)
+
+sapply(NYPD, function(x) sum(is.na(x)))
+
+names(NYPD)
+
+```
+
+# Exploring Incident Time Series Data
+
+## Total Yearly Incidents
+
+```{r}
+# Change OCCUR_DATE to Date format
+NYPD$OCCUR_DATE <- as.Date(NYPD$OCCUR_DATE, format = "%m/%d/%Y")
+
+# Get year
+NYPD$YEAR <- format(NYPD$OCCUR_DATE, "%Y")
+
+# Group by year
+yearly_incidents <- NYPD %>%
+  group_by(YEAR) %>%
+  summarise(Incidents = n())
+
+# Plot total yearly incidents 
+g <- ggplot(yearly_incidents, aes(x = YEAR, y = Incidents)) +
+  geom_col(fill = "#3BB9FF", colour = "black") +  
+  labs(title = "Total Yearly Incidents in NYC",
+       x = "Year",
+       y = "Number of Incidents") +
+  theme(legend.position = "none")
+
+# Print the plot
+print(g)
+
+```
+
+## Total Daily Incidents
+
+```{r}
+
+# Get day
+NYPD$DAY_OF_WEEK <- weekdays(NYPD$OCCUR_DATE)
+
+# Group totals by day of week
+daily_incidents <- NYPD %>%
+  group_by(DAY_OF_WEEK) %>%
+  summarise(Incidents = n())
+
+
+order_days <- c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+
+# Plot total daily incidents 
+g <- ggplot(daily_incidents, aes(x = factor(DAY_OF_WEEK, levels = order_days), y = Incidents)) +
+  geom_col(fill = "#3BB9FF", color = "black") + 
+  labs(title = "Total Incidents by Day of the Week in NYC",
+       x = "Day of the Week",
+       y = "Number of Incidents") +
+  theme(legend.position = "none")
+
+# Print the plot
+print(g)
+
+
+```
+
+```{r}
+# Extract hour of the day from OCCUR_TIME
+NYPD$HOUR_OF_DAY <- as.numeric(format(strptime(NYPD$OCCUR_TIME, format = "%H:%M:%S"), "%H"))
+
+# Group data by hour of the day and count the number of incidents
+hourly_incidents <- NYPD %>%
+  group_by(HOUR_OF_DAY) %>%
+  summarise(Incidents = n())
+
+
+# Plot total incidents vs hour of day
+g <- ggplot(hourly_incidents, aes(x = HOUR_OF_DAY, y = Incidents)) +
+  geom_point(color = "#3BB9FF") +
+  geom_smooth(method = "loess", se = FALSE, color = "#5EFB6E") +
+  labs(title = "Total Incidents by Hour of the Day in NYC",
+       x = "Hour of the Day",
+       y = "Number of Incidents") 
+
+
+print(g)
+
+
+```
+
+# Exploring Location Data
+
+## Total Incidents by Borough
+
+```{r}
+# Group data by BORO
+boro_incidents <- NYPD %>%
+  group_by(BORO) %>%
+  summarise(Incidents = n())
+
+# Plot total incidents by BORO
+g <- ggplot(boro_incidents, aes(x = reorder(BORO, -Incidents), y = Incidents)) +
+  geom_bar(stat = "identity", fill = "#3BB9FF", color = "black") +  
+  labs(title = "Total Incidents by Borough in NYC",
+       x = "Borough",
+       y = "Number of Incidents") +
+  coord_flip()  
+
+
+print(g)
+
+```
+
+## Total Incidents by Location Classification
+
+```{r}
+# Create a copy of the NYPD dataset
+NYPD_copy <- NYPD
+
+# Filter out blanks and NAs, then summarize incidents by location classification
+classfctn_incidents <- NYPD_copy %>%
+  filter(LOCATION_DESC != "", !is.na(LOCATION_DESC)) %>%
+  group_by(LOCATION_DESC) %>%
+  summarise(Incidents = n()) %>%
+  arrange(desc(Incidents)) %>%
+  top_n(10)  # Select top 10 
+
+# Plot total incidents for the top 10 location classifications
+g <- ggplot(classfctn_incidents, aes(x = reorder(LOCATION_DESC, -Incidents), y = Incidents)) +
+  geom_bar(stat = "identity", fill = "#3BB9FF", color = "black") +
+  labs(title = "Top 10 Locations by Total Incidents in NYC ",
+       x = "Location Classification",
+       y = "Number of Incidents") +
+
+  coord_flip()
+
+# plot
+print(g)
+
+
+```
+
+# Modeling Factors that can Contribute to the Fatality of a Shooting
+
+```{r}
+
+
+NYPD$STATISTICAL_MURDER_FLAG <- as.integer(NYPD$STATISTICAL_MURDER_FLAG == "true")
+
+# Fit the model with all specified variables
+glm.fit <- glm(STATISTICAL_MURDER_FLAG ~ PERP_RACE + PERP_SEX + PERP_AGE_GROUP + 
+               VIC_AGE_GROUP + VIC_SEX + VIC_RACE + BORO + HOUR_OF_DAY + 
+               DAY_OF_WEEK + 
+               LOC_CLASSFCTN_DESC + LOCATION_DESC + LOC_OF_OCCUR_DESC + 
+               PRECINCT, data = NYPD, family = binomial)
+
+
+# Summary of the model
+summary(glm.fit)
+
+# Obtain tidy version of the glm model
+tidy_glm <- tidy(glm.fit)
+
+# Remove NA coefficients and sort the coefficients in descending order
+sorted_tidy_glm <- tidy_glm %>%
+  filter(!is.na(estimate)) %>%
+  arrange(desc(estimate))
+
+# Print the sorted table of coefficients
+print(sorted_tidy_glm)
+
+
+```
+
+```{r}
+
+tidy_glm <- tidy(glm.fit)
+
+# Remove rows with NA coefficients, non-significant p-values, and the intercept
+tidy_glm <- tidy_glm %>%
+  filter(!is.na(estimate) & p.value < 0.001 & term != "(Intercept)")
+
+# Create a plot 
+ggplot(tidy_glm, aes(x = reorder(term, estimate), y = estimate)) +
+  geom_col(fill = "#3BB9FF", color = "black", show.legend = FALSE) +  
+  coord_flip() +  
+  labs(x = "Coefficient", y = "Predictor", title = "Significant Coefficients of Predictors") +
+  theme(
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, face = "bold", hjust = 3),  # Align title to the left properly
+    panel.grid.major = element_blank(),  # Remove major grid lines
+    panel.grid.minor = element_blank(),  # Remove minor grid lines
+    plot.margin = margin(10, 10, 10, 10)  # Adjust plot margins if needed
+  )
+
+```
+
+\`\`\`
+
+# Conclusion
+
+-   **NYC Incident Trends**: Declining incidents with a sharp drop present, possibly due to global factors.
+
+-   **Day of the Week**: Increased incidents on weekends
+
+-   **Hourly Distribution**: most incidents during evening hours; fewest in the early morning.
+
+-   **Borough Analysis**: Higher incident rates in Brooklyn and the Bronx; Manhattan has fewer murder-classified incidents.
+
+-   **Location**: Incidents are most common in public housing units
+
+**Factors Which Contribute to Fatality - Logistic Regression Insights:**
+
+-   Race: Specific racial groups such as White, Asian/Pacific Islander, Black, and Black Hispanic have higher odds of incidents being classified as murders, underscoring the influence of racial dynamics on shooting outcomes.
+
+-   Location Type: Video stores and drug stores, as indoor locations, show strong associations with murder classifications, likely due to the close-range nature of incidents in these settings.
+
+-   Unknown Age Group: The 'UNKNOWN' age category for perpetrators is significantly associated with fatal outcomes, indicating challenges or risks associated with unidentified offenders.
+
+-   Victim Age: Older victims, particularly those over 65, are more frequently involved in fatal shootings, pointing to their increased vulnerability.
+
+-   Perpetrator Gender: The presence of an "UNKNOWN" category for gender highlights potential ambiguities in the data, affecting the analysis of gender impacts on murder classifications.
+
+Summary: The analysis reveals significant racial and locational factors in murder classifications within NYPD shooting incidents, with additional complexity introduced by unknown demographic data. These findings highlight the critical areas for law enforcement focus and further research to address and mitigate the risks associated with these key predictors.
+
+-   **Potential Biases**:
+
+    -   Data Collection Bias: Risks due to non-representative data or reporting variances.
+
+    -   Measurement Bias: Inconsistencies in incident classification processes.
+
+    -   Omitted Variable Bias: Missing variables could distort the analysis.
+
+    -   Modeling Bias: The model may not accurately capture the complexity of incident classifications.
